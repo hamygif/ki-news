@@ -1,0 +1,71 @@
+name: KI News aktualisieren
+
+on:
+  schedule:
+    # GitHub rechnet in UTC. 6:00 Uhr deutscher Zeit ist
+    # im Sommer (MESZ) 4:00 UTC und im Winter (MEZ) 5:00 UTC.
+    - cron: "0 4 * * *"
+    - cron: "0 5 * * *"
+  workflow_dispatch: # manueller Start über den "Run workflow"-Knopf
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ki-news
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Ist es gerade 6 Uhr in Deutschland?
+        id: check
+        run: |
+          OFFSET=$(TZ=Europe/Berlin date +%z)   # +0100 im Winter, +0200 im Sommer
+          RUN=false
+          if [ "${{ github.event_name }}" != "schedule" ]; then RUN=true
+          elif [ "${{ github.event.schedule }}" = "0 4 * * *" ] && [ "$OFFSET" = "+0200" ]; then RUN=true
+          elif [ "${{ github.event.schedule }}" = "0 5 * * *" ] && [ "$OFFSET" = "+0100" ]; then RUN=true
+          fi
+          echo "Berlin-Offset: $OFFSET -> ausführen: $RUN"
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: News holen und Seite bauen
+        if: steps.check.outputs.run == 'true'
+        run: python ki_news.py
+
+      - name: Neue Seite ins Repository speichern
+        if: steps.check.outputs.run == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site
+          git diff --cached --quiet || git commit -m "News-Update $(TZ=Europe/Berlin date '+%d.%m.%Y %H:%M')"
+          git push
+
+      - uses: actions/configure-pages@v5
+        if: steps.check.outputs.run == 'true'
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.check.outputs.run == 'true'
+        with:
+          path: site
+
+      - name: Auf GitHub Pages veröffentlichen
+        id: deploy
+        if: steps.check.outputs.run == 'true'
+        uses: actions/deploy-pages@v4
